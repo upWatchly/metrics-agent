@@ -343,11 +343,18 @@ func (c *Collector) collectNetwork(report *client.MetricsReport) {
 	curOut := counters[0].BytesSent
 	elapsed := now.Sub(c.prevTime).Seconds()
 
-	// Guard against counter reset (reboot, interface reset)
+	// Guard against counter reset and anomalous spikes
 	if elapsed > 0 && curIn >= c.prevNetIn && curOut >= c.prevNetOut {
-		report.Network = client.Network{
-			InBytesPerSec:  uint64(float64(curIn-c.prevNetIn) / elapsed),
-			OutBytesPerSec: uint64(float64(curOut-c.prevNetOut) / elapsed),
+		inRate := uint64(float64(curIn-c.prevNetIn) / elapsed)
+		outRate := uint64(float64(curOut-c.prevNetOut) / elapsed)
+
+		// Cap at 100 Gbps — anything above is an anomalous read
+		const maxRate = 100 * 1024 * 1024 * 1024 / 8 // 12.5 GB/s
+		if inRate <= maxRate && outRate <= maxRate {
+			report.Network = client.Network{
+				InBytesPerSec:  inRate,
+				OutBytesPerSec: outRate,
+			}
 		}
 	}
 
