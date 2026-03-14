@@ -14,24 +14,24 @@ import (
 )
 
 const (
-	maxRetries     = 3
-	baseBackoff    = 1 * time.Second
-	maxBackoff     = 30 * time.Second
-	backoffFactor  = 2.0
+	maxRetries    = 3
+	baseBackoff   = 1 * time.Second
+	maxBackoff    = 30 * time.Second
+	backoffFactor = 2.0
 )
 
 // Client communicates with the Upwatchly backend.
 type Client struct {
 	baseURL    string
-	apiKey     string
+	token      string
 	httpClient *http.Client
 }
 
 // New creates a new API client.
-func New(baseURL, apiKey string) *Client {
+func New(baseURL, token string) *Client {
 	return &Client{
 		baseURL: baseURL,
-		apiKey:  apiKey,
+		token:   token,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 		},
@@ -80,13 +80,13 @@ func (c *Client) SendMetrics(ctx context.Context, report *MetricsReport) (*Serve
 }
 
 func (c *Client) doSend(ctx context.Context, body []byte) (*ServerConfig, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/metrics", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/servers/report", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-agent-api-key", c.apiKey)
+	req.Header.Set("X-Server-Token", c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

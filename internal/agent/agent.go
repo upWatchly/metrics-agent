@@ -64,11 +64,11 @@ func (a *Agent) report(ctx context.Context) {
 	}
 
 	log.WithFields(log.Fields{
-		"cpu":    metrics.CPUPercent,
-		"mem":    metrics.MemoryPercent,
+		"cpu":    metrics.CPU,
+		"mem":    metrics.Memory,
 		"disks":  len(metrics.Disks),
-		"netIn":  metrics.NetworkInBytesPS,
-		"netOut": metrics.NetworkOutBytesPS,
+		"netIn":  metrics.Network.InBytesPerSec,
+		"netOut": metrics.Network.OutBytesPerSec,
 	}).Debug("collected metrics")
 
 	config, err := a.client.SendMetrics(reportCtx, metrics)

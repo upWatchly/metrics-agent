@@ -13,14 +13,14 @@ type Config struct {
 
 // LoadConfig reads configuration from environment variables.
 func LoadConfig() (*Config, error) {
-	endpoint := os.Getenv("API_ENDPOINT")
+	endpoint := os.Getenv("UW_API_ENDPOINT")
 	if endpoint == "" {
-		return nil, fmt.Errorf("API_ENDPOINT is required")
+		return nil, fmt.Errorf("UW_API_ENDPOINT is required")
 	}
 
-	apiKey := os.Getenv("API_KEY")
+	apiKey := os.Getenv("UW_API_KEY")
 	if apiKey == "" {
-		return nil, fmt.Errorf("API_KEY is required")
+		return nil, fmt.Errorf("UW_API_KEY is required")
 	}
 
 	return &Config{
