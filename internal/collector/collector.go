@@ -179,6 +179,9 @@ func (c *Collector) collectNormal(ctx context.Context, report *client.MetricsRep
 		return nil, fmt.Errorf("disks: %w", err)
 	}
 
+	// Docker containers
+	report.DockerContainers = c.collectDockerContainers(ctx)
+
 	// Network
 	c.collectNetwork(report)
 

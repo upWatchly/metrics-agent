@@ -15,14 +15,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata && \
-    adduser -D -g '' appuser
+RUN apk add --no-cache ca-certificates tzdata
 
 COPY --from=builder /build/metrics-agent /app/metrics-agent
 
 ENV HOST_PROC=/host/proc
 ENV HOST_SYS=/host/sys
 ENV HOST_ETC=/host/etc
-
-USER appuser
 ENTRYPOINT ["/app/metrics-agent"]
