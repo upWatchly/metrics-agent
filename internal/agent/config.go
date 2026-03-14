@@ -1,0 +1,30 @@
+package agent
+
+import (
+	"fmt"
+	"os"
+)
+
+// Config holds agent configuration from environment variables.
+type Config struct {
+	APIEndpoint string
+	APIKey      string
+}
+
+// LoadConfig reads configuration from environment variables.
+func LoadConfig() (*Config, error) {
+	endpoint := os.Getenv("API_ENDPOINT")
+	if endpoint == "" {
+		return nil, fmt.Errorf("API_ENDPOINT is required")
+	}
+
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("API_KEY is required")
+	}
+
+	return &Config{
+		APIEndpoint: endpoint,
+		APIKey:      apiKey,
+	}, nil
+}

@@ -1,0 +1,5 @@
+metrics-agent
+*.exe
+.env
+.idea/
+.vscode/
