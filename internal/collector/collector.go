@@ -2,10 +2,11 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
@@ -463,130 +464,174 @@ func (c *Collector) collectProcesses(ctx context.Context) []client.Process {
 	return result
 }
 
+const dockerSocket = "/var/run/docker.sock"
+
+// dockerAPIContainer matches the JSON from /containers/json
+type dockerAPIContainer struct {
+	ID     string          `json:"Id"`
+	Names  []string        `json:"Names"`
+	Image  string          `json:"Image"`
+	Status string          `json:"Status"`
+	State  string          `json:"State"`
+	Ports  []dockerAPIPort `json:"Ports"`
+}
+
+type dockerAPIPort struct {
+	IP          string `json:"IP"`
+	PrivatePort uint16 `json:"PrivatePort"`
+	PublicPort  uint16 `json:"PublicPort"`
+	Type        string `json:"Type"`
+}
+
+// dockerAPIStats matches the subset of /containers/{id}/stats we need
+type dockerAPIStats struct {
+	CPUStats    dockerCPUStats    `json:"cpu_stats"`
+	PreCPUStats dockerCPUStats    `json:"precpu_stats"`
+	MemoryStats dockerMemoryStats `json:"memory_stats"`
+}
+
+type dockerCPUStats struct {
+	CPUUsage struct {
+		TotalUsage uint64 `json:"total_usage"`
+	} `json:"cpu_usage"`
+	SystemCPUUsage uint64 `json:"system_cpu_usage"`
+	OnlineCPUs     int    `json:"online_cpus"`
+}
+
+type dockerMemoryStats struct {
+	Usage uint64 `json:"usage"`
+	Limit uint64 `json:"limit"`
+}
+
 func (c *Collector) collectDockerContainers(ctx context.Context) []client.DockerContainer {
-	dockerPath, err := exec.LookPath("docker")
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.DialTimeout("unix", dockerSocket, 3*time.Second)
+		},
+	}
+	cl := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+
+	// List all containers
+	listReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/containers/json?all=true", nil)
 	if err != nil {
 		return nil
 	}
-
-	out, err := exec.CommandContext(ctx, dockerPath, "ps", "-a",
-		"--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.State}}\t{{.Ports}}",
-	).Output()
+	listResp, err := cl.Do(listReq)
 	if err != nil {
-		log.WithError(err).Debug("failed to list docker containers")
+		log.WithError(err).Debug("docker: failed to list containers")
+		return nil
+	}
+	defer listResp.Body.Close()
+
+	var apiContainers []dockerAPIContainer
+	if err := json.NewDecoder(io.LimitReader(listResp.Body, 4<<20)).Decode(&apiContainers); err != nil {
+		log.WithError(err).Debug("docker: failed to decode container list")
 		return nil
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) == 0 || lines[0] == "" {
+	if len(apiContainers) == 0 {
 		return nil
 	}
 
-	statsOut, err := exec.CommandContext(ctx, dockerPath, "stats", "--no-stream",
-		"--format", "{{.ID}}\t{{.CPUPerc}}\t{{.MemUsage}}",
-	).Output()
-	if err != nil {
-		log.WithError(err).Debug("failed to get docker stats")
+	// Collect stats for running containers in parallel
+	type statsResult struct {
+		id  string
+		cpu float64
+		mem uint64
+		lim uint64
 	}
-	statsMap := parseDockerStats(string(statsOut))
+	statsCh := make(chan statsResult, len(apiContainers))
+	var wg sync.WaitGroup
 
-	containers := make([]client.DockerContainer, 0, len(lines))
-	for _, line := range lines {
-		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) < 6 {
+	for _, ac := range apiContainers {
+		if ac.State != "running" {
 			continue
 		}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			statsReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				fmt.Sprintf("http://localhost/containers/%s/stats?stream=false", id), nil)
+			if err != nil {
+				return
+			}
+			resp, err := cl.Do(statsReq)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
 
-		id := parts[0]
-		shortID := id
+			var s dockerAPIStats
+			if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&s); err != nil {
+				return
+			}
+
+			cpuPct := calcDockerCPUPercent(s)
+			statsCh <- statsResult{
+				id:  id,
+				cpu: cpuPct,
+				mem: s.MemoryStats.Usage,
+				lim: s.MemoryStats.Limit,
+			}
+		}(ac.ID)
+	}
+	wg.Wait()
+	close(statsCh)
+
+	statsMap := make(map[string]statsResult)
+	for sr := range statsCh {
+		statsMap[sr.id] = sr
+	}
+
+	// Build result
+	containers := make([]client.DockerContainer, 0, len(apiContainers))
+	for _, ac := range apiContainers {
+		shortID := ac.ID
 		if len(shortID) > 12 {
 			shortID = shortID[:12]
 		}
-		stats := statsMap[id]
+
+		name := ""
+		if len(ac.Names) > 0 {
+			name = strings.TrimPrefix(ac.Names[0], "/")
+		}
 
 		var ports []string
-		if parts[5] != "" {
-			for _, p := range strings.Split(parts[5], ", ") {
-				trimmed := strings.TrimSpace(p)
-				if trimmed != "" {
-					ports = append(ports, trimmed)
-				}
+		for _, p := range ac.Ports {
+			if p.PublicPort > 0 {
+				ports = append(ports, fmt.Sprintf("%s:%d->%d/%s", p.IP, p.PublicPort, p.PrivatePort, p.Type))
+			} else {
+				ports = append(ports, fmt.Sprintf("%d/%s", p.PrivatePort, p.Type))
 			}
 		}
 
+		sr := statsMap[ac.ID]
 		containers = append(containers, client.DockerContainer{
 			ID:          shortID,
-			Name:        parts[1],
-			Image:       parts[2],
-			Status:      parts[3],
-			State:       parts[4],
-			CPUPercent:  stats.cpu,
-			MemoryUsage: stats.memUsage,
-			MemoryLimit: stats.memLimit,
+			Name:        name,
+			Image:       ac.Image,
+			Status:      ac.Status,
+			State:       ac.State,
+			CPUPercent:  round2(sr.cpu),
+			MemoryUsage: sr.mem,
+			MemoryLimit: sr.lim,
 			Ports:       ports,
 		})
 	}
 	return containers
 }
 
-type containerStats struct {
-	cpu      float64
-	memUsage uint64
-	memLimit uint64
-}
-
-func parseDockerStats(output string) map[string]containerStats {
-	result := make(map[string]containerStats)
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for _, line := range lines {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
-			continue
-		}
-		cpuStr := strings.TrimSuffix(parts[1], "%")
-		var cpuVal float64
-		if _, err := fmt.Sscanf(cpuStr, "%f", &cpuVal); err != nil {
-			log.WithFields(log.Fields{
-				"raw": parts[1],
-			}).WithError(err).Debug("failed to parse docker CPU percent")
-		}
-
-		memUsage, memLimit := parseMemUsage(parts[2])
-
-		result[parts[0]] = containerStats{
-			cpu:      round2(cpuVal),
-			memUsage: memUsage,
-			memLimit: memLimit,
-		}
+func calcDockerCPUPercent(s dockerAPIStats) float64 {
+	cpuDelta := float64(s.CPUStats.CPUUsage.TotalUsage - s.PreCPUStats.CPUUsage.TotalUsage)
+	sysDelta := float64(s.CPUStats.SystemCPUUsage - s.PreCPUStats.SystemCPUUsage)
+	if sysDelta <= 0 || cpuDelta < 0 {
+		return 0
 	}
-	return result
-}
-
-func parseMemUsage(s string) (uint64, uint64) {
-	parts := strings.Split(s, " / ")
-	if len(parts) != 2 {
-		return 0, 0
+	cpus := s.CPUStats.OnlineCPUs
+	if cpus == 0 {
+		cpus = 1
 	}
-	return parseByteSize(strings.TrimSpace(parts[0])), parseByteSize(strings.TrimSpace(parts[1]))
-}
-
-func parseByteSize(s string) uint64 {
-	var val float64
-	var unit string
-	fmt.Sscanf(s, "%f%s", &val, &unit)
-	switch strings.ToLower(unit) {
-	case "b":
-		return uint64(val)
-	case "kib":
-		return uint64(val * 1024)
-	case "mib":
-		return uint64(val * 1024 * 1024)
-	case "gib":
-		return uint64(val * 1024 * 1024 * 1024)
-	case "tib":
-		return uint64(val * 1024 * 1024 * 1024 * 1024)
-	}
-	return 0
+	return (cpuDelta / sysDelta) * float64(cpus) * 100.0
 }
 
 func round2(v float64) float64 {
