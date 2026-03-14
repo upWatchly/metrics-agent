@@ -33,9 +33,16 @@ esac
 
 # --- Get latest release URL ---
 echo "Detecting latest release..."
-DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" \
+DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/${REPO}/releases/tags/latest" \
   | grep "browser_download_url.*linux-${ARCH}" \
   | cut -d '"' -f 4)
+
+# Fallback to latest stable release
+if [ -z "$DOWNLOAD_URL" ]; then
+  DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep "browser_download_url.*linux-${ARCH}" \
+    | cut -d '"' -f 4)
+fi
 
 if [ -z "$DOWNLOAD_URL" ]; then
   echo "Error: could not find binary for linux-${ARCH}" >&2
