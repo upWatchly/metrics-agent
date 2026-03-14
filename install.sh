@@ -15,12 +15,17 @@ fi
 # --- Check API key (not required for updates) ---
 API_KEY="$1"
 IS_UPDATE=false
-if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+if [ -f /etc/systemd/system/${SERVICE_NAME}.service ]; then
   IS_UPDATE=true
 fi
 
 if [ -z "$API_KEY" ] && [ "$IS_UPDATE" = false ]; then
   echo "Usage: sudo bash install.sh <API_KEY>" >&2
+  exit 1
+fi
+
+if [ -n "$API_KEY" ] && [ ${#API_KEY} -lt 8 ]; then
+  echo "Error: API key seems too short (min 8 characters)" >&2
   exit 1
 fi
 
@@ -38,13 +43,13 @@ esac
 
 # --- Get latest release URL ---
 echo "Detecting latest release..."
-DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/${REPO}/releases/tags/latest" \
+DOWNLOAD_URL=$(curl -sS "https://api.github.com/repos/${REPO}/releases/tags/latest" \
   | grep "browser_download_url.*linux-${ARCH}" \
   | cut -d '"' -f 4)
 
 # Fallback to latest stable release
 if [ -z "$DOWNLOAD_URL" ]; then
-  DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" \
+  DOWNLOAD_URL=$(curl -sS "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep "browser_download_url.*linux-${ARCH}" \
     | cut -d '"' -f 4)
 fi
@@ -63,12 +68,19 @@ fi
 # --- Download and install binary ---
 echo "Downloading ${BINARY_NAME} for linux/${ARCH}..."
 rm -f "${INSTALL_DIR}/${BINARY_NAME}"
-curl -sL "$DOWNLOAD_URL" -o "${INSTALL_DIR}/${BINARY_NAME}"
+curl -sSL "$DOWNLOAD_URL" -o "${INSTALL_DIR}/${BINARY_NAME}"
+
+# Verify download succeeded
+if [ ! -s "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+  echo "Error: downloaded binary is empty or missing" >&2
+  exit 1
+fi
+
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 echo "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
 
 # --- Create or update systemd service ---
-if [ "$IS_UPDATE" = true ]; then
+if [ "$IS_UPDATE" = true ] && [ -z "$API_KEY" ]; then
   echo "Starting agent..."
   systemctl start ${SERVICE_NAME}
 else

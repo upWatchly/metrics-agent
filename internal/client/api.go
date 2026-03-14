@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"time"
 
@@ -52,6 +53,9 @@ func (c *Client) SendMetrics(ctx context.Context, report *MetricsReport) (*Serve
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
+			// Add ±25% jitter to avoid thundering herd
+			jitter := 0.75 + rand.Float64()*0.5 // [0.75, 1.25)
+			backoff = time.Duration(float64(backoff) * jitter)
 			log.WithFields(log.Fields{
 				"attempt": attempt + 1,
 				"backoff": backoff,
@@ -94,7 +98,7 @@ func (c *Client) doSend(ctx context.Context, body []byte) (*ServerConfig, error)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB max
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
