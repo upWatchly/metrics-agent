@@ -54,16 +54,23 @@ if [ -z "$DOWNLOAD_URL" ]; then
   exit 1
 fi
 
+# --- Stop service before replacing binary ---
+if [ "$IS_UPDATE" = true ]; then
+  echo "Stopping agent..."
+  systemctl stop ${SERVICE_NAME}
+fi
+
 # --- Download and install binary ---
 echo "Downloading ${BINARY_NAME} for linux/${ARCH}..."
+rm -f "${INSTALL_DIR}/${BINARY_NAME}"
 curl -sL "$DOWNLOAD_URL" -o "${INSTALL_DIR}/${BINARY_NAME}"
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 echo "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
 
 # --- Create or update systemd service ---
 if [ "$IS_UPDATE" = true ]; then
-  echo "Updating existing agent..."
-  systemctl restart ${SERVICE_NAME}
+  echo "Starting agent..."
+  systemctl start ${SERVICE_NAME}
 else
   cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
