@@ -3,6 +3,8 @@ package client
 // MetricsReport is the payload sent to the backend each cycle.
 type MetricsReport struct {
 	Hostname      string       `json:"hostname"`
+	PublicIPv4    string       `json:"publicIpv4,omitempty"`
+	PublicIPv6    string       `json:"publicIpv6,omitempty"`
 	OS            string       `json:"os"`
 	KernelVersion string       `json:"kernelVersion"`
 	CPU           float64      `json:"cpu"`

@@ -12,12 +12,17 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# --- Check API key ---
-if [ -z "$1" ]; then
+# --- Check API key (not required for updates) ---
+API_KEY="$1"
+IS_UPDATE=false
+if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+  IS_UPDATE=true
+fi
+
+if [ -z "$API_KEY" ] && [ "$IS_UPDATE" = false ]; then
   echo "Usage: sudo bash install.sh <API_KEY>" >&2
   exit 1
 fi
-API_KEY="$1"
 
 # --- Detect arch ---
 ARCH=$(uname -m)
@@ -55,8 +60,12 @@ curl -sL "$DOWNLOAD_URL" -o "${INSTALL_DIR}/${BINARY_NAME}"
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 echo "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
 
-# --- Create systemd service ---
-cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
+# --- Create or update systemd service ---
+if [ "$IS_UPDATE" = true ]; then
+  echo "Updating existing agent..."
+  systemctl restart ${SERVICE_NAME}
+else
+  cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=Upwatchly Metrics Agent
 After=network-online.target
@@ -75,9 +84,9 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# --- Start service ---
-systemctl daemon-reload
-systemctl enable --now ${SERVICE_NAME}
+  systemctl daemon-reload
+  systemctl enable --now ${SERVICE_NAME}
+fi
 
 echo ""
 echo "Upwatchly agent installed and running."

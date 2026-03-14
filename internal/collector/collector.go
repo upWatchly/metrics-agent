@@ -3,6 +3,8 @@ package collector
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"runtime"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
 	gnet "github.com/shirou/gopsutil/v4/net"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/upwatchly/metrics-agent/internal/client"
 )
@@ -22,13 +25,36 @@ type Collector struct {
 	prevNetIn  uint64
 	prevNetOut uint64
 	prevTime   time.Time
+	ipv4       string
+	ipv6       string
 }
 
-// New creates a new Collector and takes initial network baseline.
+// New creates a new Collector, detects public IPs and takes initial network baseline.
 func New() *Collector {
 	c := &Collector{}
+	c.detectPublicIPs()
 	c.snapshotNetwork()
 	return c
+}
+
+func (c *Collector) detectPublicIPs() {
+	c.ipv4 = fetchIP("https://api4.ipify.org")
+	c.ipv6 = fetchIP("https://api6.ipify.org")
+	log.WithFields(log.Fields{"ipv4": c.ipv4, "ipv6": c.ipv6}).Info("detected public IPs")
+}
+
+func fetchIP(url string) string {
+	cl := &http.Client{Timeout: 5 * time.Second}
+	resp, err := cl.Get(url)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func (c *Collector) snapshotNetwork() {
@@ -50,6 +76,8 @@ func (c *Collector) Collect(ctx context.Context) (*client.MetricsReport, error) 
 		return nil, fmt.Errorf("host info: %w", err)
 	}
 	report.Hostname = info.Hostname
+	report.PublicIPv4 = c.ipv4
+	report.PublicIPv6 = c.ipv6
 	report.OS = fmt.Sprintf("%s %s", strings.Title(info.Platform), info.PlatformVersion)
 	report.KernelVersion = info.KernelVersion
 	report.Uptime = info.Uptime
