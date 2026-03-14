@@ -15,7 +15,7 @@ type Config struct {
 func LoadConfig() (*Config, error) {
 	endpoint := os.Getenv("UW_API_ENDPOINT")
 	if endpoint == "" {
-		return nil, fmt.Errorf("UW_API_ENDPOINT is required")
+		endpoint = "https://api.upwatchly.com"
 	}
 
 	apiKey := os.Getenv("UW_API_KEY")
