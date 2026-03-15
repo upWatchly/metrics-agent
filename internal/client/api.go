@@ -116,6 +116,14 @@ func (c *Client) doSend(ctx context.Context, body []byte) (*ServerConfig, error)
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 
+	log.WithFields(log.Fields{
+		"status":         resp.StatusCode,
+		"liveMode":       config.LiveMode,
+		"liveInterval":   config.LiveInterval,
+		"reportInterval": config.ReportInterval,
+		"rawBody":        string(respBody),
+	}).Info("report response received")
+
 	return &config, nil
 }
 

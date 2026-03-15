@@ -179,6 +179,13 @@ func (a *Agent) send(ctx context.Context) {
 	a.serverID = config.ServerID
 	a.organizationID = config.OrganizationID
 
+	log.WithFields(log.Fields{
+		"liveMode":       config.LiveMode,
+		"liveInterval":   config.LiveInterval,
+		"reportInterval": config.ReportInterval,
+		"currentLive":    a.liveMode,
+	}).Info("received server config")
+
 	// Apply live mode
 	if config.LiveMode && config.LiveInterval > 0 {
 		if !a.liveMode {
