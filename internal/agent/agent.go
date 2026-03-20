@@ -126,11 +126,10 @@ func (a *Agent) collectLoop(ctx context.Context) {
 			case <-time.After(a.getReportInterval() / 2):
 			}
 		} else {
-			// Minimum pause to prevent CPU busy-wait
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(a.getReportInterval() / 2):
 			}
 		}
 	}
