@@ -55,11 +55,23 @@ type Collector struct {
 	// Slow collector guard
 	slowMu      sync.Mutex
 	slowRunning bool
+
+	// Reusable Docker HTTP client
+	dockerClient *http.Client
 }
 
 // New creates a new Collector, detects public IPs and takes initial network baseline.
 func New() *Collector {
-	c := &Collector{}
+	c := &Collector{
+		dockerClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.DialTimeout("unix", dockerSocket, 3*time.Second)
+				},
+			},
+			Timeout: 10 * time.Second,
+		},
+	}
 	c.detectPublicIPs()
 	c.cacheStaticInfo()
 	c.snapshotNetwork()
@@ -516,19 +528,12 @@ type dockerMemoryStats struct {
 }
 
 func (c *Collector) collectDockerContainers(ctx context.Context) []client.DockerContainer {
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.DialTimeout("unix", dockerSocket, 3*time.Second)
-		},
-	}
-	cl := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-
 	// List all containers
 	listReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/containers/json?all=true", nil)
 	if err != nil {
 		return nil
 	}
-	listResp, err := cl.Do(listReq)
+	listResp, err := c.dockerClient.Do(listReq)
 	if err != nil {
 		log.WithError(err).Debug("docker: failed to list containers")
 		return nil
@@ -567,7 +572,7 @@ func (c *Collector) collectDockerContainers(ctx context.Context) []client.Docker
 			if err != nil {
 				return
 			}
-			resp, err := cl.Do(statsReq)
+			resp, err := c.dockerClient.Do(statsReq)
 			if err != nil {
 				return
 			}
