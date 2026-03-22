@@ -44,12 +44,14 @@ func main() {
 		cancel()
 	}()
 
-	go func() {
-		log.Info("pprof listening on :6060")
-		if err := http.ListenAndServe(":6060", nil); err != nil {
-			log.WithError(err).Warn("pprof server failed")
-		}
-	}()
+	if os.Getenv("UW_PPROF") == "true" {
+		go func() {
+			log.Info("pprof listening on :6060")
+			if err := http.ListenAndServe(":6060", nil); err != nil {
+				log.WithError(err).Warn("pprof server failed")
+			}
+		}()
+	}
 
 	a := agent.New(cfg)
 	a.Run(ctx)
