@@ -118,18 +118,22 @@ func (a *Agent) collectLoop(ctx context.Context) {
 			firstOnce.Do(func() { close(a.firstReady) })
 		}
 
+		timer := time.NewTimer(a.getReportInterval() / 2)
 		if !a.getLiveMode() {
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
 			case <-a.wakeCollect:
-			case <-time.After(a.getReportInterval() / 2):
+				timer.Stop()
+			case <-timer.C:
 			}
 		} else {
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-time.After(a.getReportInterval() / 2):
+			case <-timer.C:
 			}
 		}
 	}

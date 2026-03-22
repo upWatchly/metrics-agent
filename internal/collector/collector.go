@@ -212,11 +212,13 @@ func (c *Collector) StartSlowCollector(ctx context.Context) {
 		// Initial collection inside goroutine to avoid blocking the caller
 		c.refreshSlowData(ctx)
 
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-ticker.C:
 				c.refreshSlowData(ctx)
 			}
 		}
