@@ -166,10 +166,7 @@ func (a *Agent) send(ctx context.Context) {
 		"liveMode": live,
 	}).Debug("sending metrics")
 
-	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	config, err := a.client.SendMetrics(sendCtx, &metrics)
+	config, err := a.client.SendMetrics(ctx, &metrics)
 	if err != nil {
 		log.WithError(err).Error("failed to send metrics")
 		return

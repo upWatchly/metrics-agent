@@ -84,7 +84,10 @@ func (c *Client) SendMetrics(ctx context.Context, report *MetricsReport) (*Serve
 }
 
 func (c *Client) doSend(ctx context.Context, body []byte) (*ServerConfig, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/servers/report", bytes.NewReader(body))
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.baseURL+"/v1/servers/report", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
