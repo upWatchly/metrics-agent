@@ -20,7 +20,11 @@ var (
 
 func main() {
 	log.SetFormatter(&log.JSONFormatter{})
-	log.SetLevel(log.DebugLevel)
+	logLevel, err := log.ParseLevel(os.Getenv("UW_LOG_LEVEL"))
+	if err != nil {
+		logLevel = log.InfoLevel
+	}
+	log.SetLevel(logLevel)
 
 	log.WithFields(log.Fields{
 		"version": version,

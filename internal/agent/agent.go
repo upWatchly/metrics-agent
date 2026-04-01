@@ -45,7 +45,8 @@ type Agent struct {
 // New creates a new Agent.
 func New(cfg *Config) *Agent {
 	return &Agent{
-		client:         client.New(cfg.APIEndpoint, cfg.APIKey),
+		client: client.New(cfg.APIEndpoint, cfg.APIKey, cfg.DisableKeepAlive),
+
 		collector:      collector.New(),
 		reportInterval: defaultReportInterval * time.Second,
 		wakeCollect:    make(chan struct{}, 1),

@@ -3,12 +3,14 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptrace"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -29,12 +31,16 @@ type Client struct {
 }
 
 // New creates a new API client.
-func New(baseURL, token string) *Client {
+func New(baseURL, token string, disableKeepAlive bool) *Client {
 	return &Client{
 		baseURL: baseURL,
 		token:   token,
 		httpClient: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout: 15 * time.Second,
+			Transport: &http.Transport{
+				DisableKeepAlives:   disableKeepAlive,
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
 		},
 	}
 }
@@ -95,8 +101,30 @@ func (c *Client) doSend(ctx context.Context, body []byte) (*ServerConfig, error)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Server-Token", c.token)
 
+	var dnsStart, connStart, tlsStart time.Time
+	trace := &httptrace.ClientTrace{
+		DNSStart:     func(_ httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone:      func(_ httptrace.DNSDoneInfo) { log.WithField("dur", time.Since(dnsStart)).Debug("http: dns") },
+		ConnectStart: func(_, _ string) { connStart = time.Now() },
+		ConnectDone: func(_, _ string, err error) {
+			f := log.Fields{"dur": time.Since(connStart)}
+			if err != nil {
+				f["error"] = err.Error()
+			}
+			log.WithFields(f).Debug("http: connect")
+		},
+		TLSHandshakeStart: func() { tlsStart = time.Now() },
+		TLSHandshakeDone:  func(_ tls.ConnectionState, _ error) { log.WithField("dur", time.Since(tlsStart)).Debug("http: tls") },
+		GotConn: func(info httptrace.GotConnInfo) {
+			log.WithFields(log.Fields{"reused": info.Reused, "idle": info.IdleTime}).Debug("http: got conn")
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(reqCtx, trace))
+
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.WithFields(log.Fields{"error": err.Error(), "dur": time.Since(start)}).Debug("http: request failed")
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()

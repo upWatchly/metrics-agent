@@ -3,12 +3,14 @@ package agent
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // Config holds agent configuration from environment variables.
 type Config struct {
-	APIEndpoint string
-	APIKey      string
+	APIEndpoint      string
+	APIKey           string
+	DisableKeepAlive bool
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -23,8 +25,11 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("UW_API_KEY is required")
 	}
 
+	disableKeepAlive, _ := strconv.ParseBool(os.Getenv("UW_DISABLE_KEEP_ALIVE"))
+
 	return &Config{
-		APIEndpoint: endpoint,
-		APIKey:      apiKey,
+		APIEndpoint:      endpoint,
+		APIKey:           apiKey,
+		DisableKeepAlive: disableKeepAlive,
 	}, nil
 }
