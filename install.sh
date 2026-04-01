@@ -94,6 +94,8 @@ Wants=network-online.target
 Type=simple
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Environment=UW_API_KEY=${API_KEY}
+Environment=UW_LOG_LEVEL=info
+Environment=UW_DISABLE_KEEP_ALIVE=false
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -111,5 +113,10 @@ echo ""
 echo "Upwatchly agent installed and running."
 echo "  Status:  systemctl status ${SERVICE_NAME}"
 echo "  Logs:    journalctl -u ${SERVICE_NAME} -f"
+echo "  Config:  /etc/systemd/system/${SERVICE_NAME}.service"
 echo "  Stop:    systemctl stop ${SERVICE_NAME}"
 echo "  Remove:  systemctl stop ${SERVICE_NAME} && systemctl disable ${SERVICE_NAME} && rm ${INSTALL_DIR}/${BINARY_NAME} /etc/systemd/system/${SERVICE_NAME}.service"
+echo ""
+echo "To change settings, edit the service file and restart:"
+echo "  sudo nano /etc/systemd/system/${SERVICE_NAME}.service"
+echo "  sudo systemctl daemon-reload && sudo systemctl restart ${SERVICE_NAME}"
