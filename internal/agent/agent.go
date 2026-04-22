@@ -24,6 +24,7 @@ const (
 type Agent struct {
 	client    *client.Client
 	collector *collector.Collector
+	version   string
 
 	// Mutable state protected by mu
 	mu             sync.RWMutex
@@ -42,10 +43,12 @@ type Agent struct {
 	firstReady  chan struct{} // closed when first metrics collected
 }
 
-// New creates a new Agent.
-func New(cfg *Config) *Agent {
+// New creates a new Agent. `version` is stamped into every report so the server
+// can track which agent build each host is running.
+func New(cfg *Config, version string) *Agent {
 	return &Agent{
-		client: client.New(cfg.APIEndpoint, cfg.APIKey, cfg.DisableKeepAlive),
+		client:  client.New(cfg.APIEndpoint, cfg.APIKey, cfg.DisableKeepAlive),
+		version: version,
 
 		collector:      collector.New(),
 		reportInterval: defaultReportInterval * time.Second,
@@ -151,6 +154,7 @@ func (a *Agent) send(ctx context.Context) {
 
 	// Copy to avoid mutating the shared object
 	metrics := *orig
+	metrics.AgentVersion = a.version
 
 	a.mu.RLock()
 	metrics.ServerID = a.serverID

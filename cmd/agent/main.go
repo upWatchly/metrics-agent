@@ -57,7 +57,7 @@ func main() {
 		}()
 	}
 
-	a := agent.New(cfg)
+	a := agent.New(cfg, version)
 	a.Run(ctx)
 
 	log.Info("metrics-agent stopped")

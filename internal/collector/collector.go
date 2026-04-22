@@ -166,14 +166,14 @@ func (c *Collector) Collect(ctx context.Context, liveMode bool) (*client.Metrics
 }
 
 func (c *Collector) collectNormal(ctx context.Context, report *client.MetricsReport) (*client.MetricsReport, error) {
-	// CPU usage (1-second sample)
-	cpuPercents, err := cpu.PercentWithContext(ctx, time.Second, false)
+	// CPU usage with user/system breakdown (1-second sample).
+	total, user, system, err := sampleCPU(ctx, time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("cpu percent: %w", err)
 	}
-	if len(cpuPercents) > 0 {
-		report.CPU = round2(cpuPercents[0])
-	}
+	report.CPU = round2(total)
+	report.CPUUser = round2(user)
+	report.CPUSystem = round2(system)
 
 	// Memory
 	vmem, err := mem.VirtualMemoryWithContext(ctx)
@@ -274,23 +274,23 @@ func (c *Collector) refreshSlowData(ctx context.Context) {
 
 func (c *Collector) collectLive(ctx context.Context, report *client.MetricsReport) (*client.MetricsReport, error) {
 	var wg sync.WaitGroup
-	var cpuPct float64
+	var cpuPct, cpuUserPct, cpuSystemPct float64
 	var vmem *mem.VirtualMemoryStat
 	var procs []client.Process
 	var cpuErr, memErr error
 
-	// CPU — 500ms sample
+	// CPU — 500ms sample with breakdown
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		pcts, err := cpu.PercentWithContext(ctx, 500*time.Millisecond, false)
+		total, user, system, err := sampleCPU(ctx, 500*time.Millisecond)
 		if err != nil {
 			cpuErr = err
 			return
 		}
-		if len(pcts) > 0 {
-			cpuPct = pcts[0]
-		}
+		cpuPct = total
+		cpuUserPct = user
+		cpuSystemPct = system
 	}()
 
 	// Memory
@@ -321,6 +321,8 @@ func (c *Collector) collectLive(ctx context.Context, report *client.MetricsRepor
 	}
 
 	report.CPU = round2(cpuPct)
+	report.CPUUser = round2(cpuUserPct)
+	report.CPUSystem = round2(cpuSystemPct)
 	report.Memory = client.Memory{
 		UsedBytes:  vmem.Used,
 		TotalBytes: vmem.Total,
@@ -653,4 +655,37 @@ func calcDockerCPUPercent(s dockerAPIStats) float64 {
 
 func round2(v float64) float64 {
 	return float64(int(v*100)) / 100
+}
+
+// sampleCPU takes two cpu.Times snapshots separated by `interval` and returns
+// total / user / system percentages. Doing the sampling ourselves (instead of
+// calling cpu.Percent) lets us derive user and system from the same window
+// so the three numbers are consistent.
+func sampleCPU(ctx context.Context, interval time.Duration) (total, user, system float64, err error) {
+	t1, err := cpu.TimesWithContext(ctx, false)
+	if err != nil || len(t1) == 0 {
+		return 0, 0, 0, err
+	}
+	select {
+	case <-ctx.Done():
+		return 0, 0, 0, ctx.Err()
+	case <-time.After(interval):
+	}
+	t2, err := cpu.TimesWithContext(ctx, false)
+	if err != nil || len(t2) == 0 {
+		return 0, 0, 0, err
+	}
+
+	totalDelta := t2[0].Total() - t1[0].Total()
+	if totalDelta <= 0 {
+		return 0, 0, 0, nil
+	}
+	idleDelta := t2[0].Idle - t1[0].Idle
+	userDelta := t2[0].User - t1[0].User
+	systemDelta := t2[0].System - t1[0].System
+
+	total = (totalDelta - idleDelta) / totalDelta * 100
+	user = userDelta / totalDelta * 100
+	system = systemDelta / totalDelta * 100
+	return total, user, system, nil
 }

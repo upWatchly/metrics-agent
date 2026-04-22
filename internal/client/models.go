@@ -4,12 +4,15 @@ package client
 type MetricsReport struct {
 	ServerID       string       `json:"serverId,omitempty"`
 	OrganizationID string       `json:"organizationId,omitempty"`
+	AgentVersion   string       `json:"agentVersion,omitempty"`
 	Hostname       string       `json:"hostname"`
 	PublicIPv4     string       `json:"publicIpv4,omitempty"`
 	PublicIPv6     string       `json:"publicIpv6,omitempty"`
 	OS             string       `json:"os"`
 	KernelVersion  string       `json:"kernelVersion"`
 	CPU            float64      `json:"cpu"`
+	CPUUser        float64      `json:"cpuUser"`
+	CPUSystem      float64      `json:"cpuSystem"`
 	CPUCores       int          `json:"cpuCores"`
 	Memory         Memory       `json:"memory"`
 	Disks          []DiskReport `json:"disks"`
