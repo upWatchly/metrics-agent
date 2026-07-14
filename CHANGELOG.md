@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/upWatchly/metrics-agent/compare/v1.3.0...v1.4.0) (2026-07-14)
+
+
+### Features
+
+* enhance partition filtering for Linux and Windows platforms ([0ed47da](https://github.com/upWatchly/metrics-agent/commit/0ed47dab57b6ca9e41895fbc0ec9746cdaeb940e))
+
 # [1.3.0](https://github.com/upWatchly/metrics-agent/compare/v1.2.0...v1.3.0) (2026-07-14)
 
 
