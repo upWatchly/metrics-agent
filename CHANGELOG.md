@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/upWatchly/metrics-agent/compare/v1.0.0...v1.1.0) (2026-07-14)
+
+
+### Features
+
+* enhance agent reporting with error handling and disk usage management ([8002a0f](https://github.com/upWatchly/metrics-agent/commit/8002a0f8b669c7342a3de2c3c5ea932f2965c844))
+
 # 1.0.0 (2026-07-14)
 
 
