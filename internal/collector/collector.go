@@ -64,9 +64,11 @@ type Collector struct {
 	// its goroutine (and a pinned OS thread) alive until the OS returns. Cap
 	// in-flight probes at one per mountpoint and serve the last good value while
 	// one is outstanding, so a dead drive can't accumulate goroutines.
-	diskMu       sync.Mutex
-	diskInflight map[string]bool
-	lastDisk     map[string]client.DiskReport
+	diskMu             sync.Mutex
+	diskInflight       map[string]bool
+	partitionsInflight bool
+	lastDisk           map[string]client.DiskReport
+	lastDiskList       []client.DiskReport
 }
 
 // New creates a new Collector, detects public IPs and takes initial network baseline.
@@ -404,9 +406,14 @@ func (c *Collector) collectLoad(ctx context.Context, report *client.MetricsRepor
 }
 
 func (c *Collector) collectDisks(ctx context.Context) ([]client.DiskReport, error) {
-	partitions, err := disk.PartitionsWithContext(ctx, false)
+	partitions, err := c.partitionsWithHardTimeout(ctx)
 	if err != nil {
-		return nil, err
+		// Enumeration itself can wedge: gopsutil's disk.Partitions calls
+		// GetVolumeInformationW on every volume, which blocks on a disconnected
+		// mapped network drive and ignores ctx. Don't stall the cycle — serve the
+		// last successful disk set instead.
+		log.WithError(err).Debug("disk partition enumeration timed out/errored; serving last known disks")
+		return c.snapshotLastDiskList(), nil
 	}
 
 	disks := make([]client.DiskReport, 0, len(partitions))
@@ -419,28 +426,24 @@ func (c *Collector) collectDisks(ctx context.Context) ([]client.DiskReport, erro
 			continue
 		}
 
-		// A prior probe for this mount is still blocked in the OS (wedged drive).
-		// Don't spawn another; serve the last good value so the disk doesn't
-		// vanish from the report, and move on.
-		if c.diskProbePending(mp) {
-			if last, ok := c.lastDiskReport(mp); ok {
-				disks = append(disks, last)
-			}
-			continue
-		}
-
 		usage, err := c.usageWithHardTimeout(ctx, mp)
 		if err != nil {
+			// Timed out, errored, or a prior probe for this mount is still
+			// blocked in the OS. Serve the last good value so the disk doesn't
+			// vanish from the report.
 			log.WithFields(log.Fields{
 				"mount": mp,
-			}).WithError(err).Debug("disk probe timed out or errored; serving last known value")
-			// A transient timeout shouldn't drop the disk entirely.
+			}).WithError(err).Debug("disk probe unavailable; serving last known value")
 			if last, ok := c.lastDiskReport(mp); ok {
 				disks = append(disks, last)
 			}
 			continue
 		}
 		if usage.Total == 0 {
+			// Spurious zero for a still-present disk — prefer the last good value.
+			if last, ok := c.lastDiskReport(mp); ok {
+				disks = append(disks, last)
+			}
 			continue
 		}
 		rep := client.DiskReport{
@@ -451,13 +454,18 @@ func (c *Collector) collectDisks(ctx context.Context) ([]client.DiskReport, erro
 		c.storeDiskReport(mp, rep)
 		disks = append(disks, rep)
 	}
-	return disks, nil
-}
 
-func (c *Collector) diskProbePending(mp string) bool {
-	c.diskMu.Lock()
-	defer c.diskMu.Unlock()
-	return c.diskInflight[mp]
+	if len(disks) == 0 {
+		// Enumeration succeeded but yielded nothing (transient, or everything was
+		// filtered out this cycle). Prefer the last non-empty set over publishing
+		// an empty one — and don't overwrite the cached list with empty.
+		if last := c.snapshotLastDiskList(); len(last) > 0 {
+			return last, nil
+		}
+	}
+
+	c.storeLastDiskList(disks)
+	return disks, nil
 }
 
 func (c *Collector) lastDiskReport(mp string) (client.DiskReport, bool) {
@@ -473,17 +481,75 @@ func (c *Collector) storeDiskReport(mp string, rep client.DiskReport) {
 	c.lastDisk[mp] = rep
 }
 
+func (c *Collector) storeLastDiskList(disks []client.DiskReport) {
+	c.diskMu.Lock()
+	defer c.diskMu.Unlock()
+	c.lastDiskList = append(c.lastDiskList[:0:0], disks...) // detached copy
+}
+
+func (c *Collector) snapshotLastDiskList() []client.DiskReport {
+	c.diskMu.Lock()
+	defer c.diskMu.Unlock()
+	if len(c.lastDiskList) == 0 {
+		return nil
+	}
+	out := make([]client.DiskReport, len(c.lastDiskList))
+	copy(out, c.lastDiskList)
+	return out
+}
+
+// partitionsWithHardTimeout wraps disk.Partitions the same way usageWithHardTimeout
+// wraps disk.Usage: the enumeration touches every volume (GetVolumeInformationW on
+// Windows) and blocks on a disconnected network drive regardless of ctx, so a hard
+// timeout is the only way to keep a dead mount from stalling the whole cycle. The
+// in-flight flag caps a wedged enumeration at one live goroutine.
+func (c *Collector) partitionsWithHardTimeout(ctx context.Context) ([]disk.PartitionStat, error) {
+	c.diskMu.Lock()
+	if c.partitionsInflight {
+		c.diskMu.Unlock()
+		return nil, fmt.Errorf("partition enumeration already in flight")
+	}
+	c.partitionsInflight = true
+	c.diskMu.Unlock()
+
+	type result struct {
+		parts []disk.PartitionStat
+		err   error
+	}
+	ch := make(chan result, 1) // buffered so an abandoned goroutine never blocks on send
+	go func() {
+		parts, err := disk.PartitionsWithContext(ctx, false)
+		c.diskMu.Lock()
+		c.partitionsInflight = false
+		c.diskMu.Unlock()
+		ch <- result{parts, err}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.parts, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(diskTimeout):
+		return nil, fmt.Errorf("partition enumeration timed out after %s", diskTimeout)
+	}
+}
+
 // usageWithHardTimeout runs disk.Usage in a goroutine and stops waiting after
 // diskTimeout even if the call itself hasn't returned. On Windows disk.Usage
 // ends in the blocking GetDiskFreeSpaceExW syscall, which ignores ctx — a
 // disconnected mapped network drive (Z:\ ...) can wedge it for tens of seconds
 // and stall the whole collection cycle. A context timeout alone can't interrupt
 // that syscall, so we abandon the goroutine (it exits when the OS finally
-// returns) and move on. The per-mount in-flight flag (set here, cleared when the
-// goroutine finally returns) caps a wedged drive at exactly one live goroutine.
-// Also honors outer ctx cancellation for a fast shutdown.
+// returns) and move on. The per-mount in-flight flag is test-and-set atomically
+// here (returning an error if a prior probe is still running), capping a wedged
+// drive at exactly one live goroutine. Also honors outer ctx cancellation.
 func (c *Collector) usageWithHardTimeout(ctx context.Context, mountpoint string) (*disk.UsageStat, error) {
 	c.diskMu.Lock()
+	if c.diskInflight[mountpoint] {
+		c.diskMu.Unlock()
+		return nil, fmt.Errorf("disk usage for %s already in flight", mountpoint)
+	}
 	c.diskInflight[mountpoint] = true
 	c.diskMu.Unlock()
 
