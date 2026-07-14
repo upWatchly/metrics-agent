@@ -413,6 +413,12 @@ func (c *Collector) collectDisks(ctx context.Context) ([]client.DiskReport, erro
 	for _, p := range partitions {
 		mp := p.Mountpoint
 
+		// Keep only real local disks. On Windows this drops the CD/DVD drive,
+		// removable media, and network drives that disk.Partitions returns.
+		if !keepPartition(mp) {
+			continue
+		}
+
 		// A prior probe for this mount is still blocked in the OS (wedged drive).
 		// Don't spawn another; serve the last good value so the disk doesn't
 		// vanish from the report, and move on.
