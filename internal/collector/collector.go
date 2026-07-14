@@ -58,6 +58,15 @@ type Collector struct {
 
 	// Reusable Docker HTTP client
 	dockerClient *http.Client
+
+	// Disk-probe guards. On Windows disk.Usage ends in a blocking syscall
+	// (GetDiskFreeSpaceExW) that ignores our timeout, so a wedged drive keeps
+	// its goroutine (and a pinned OS thread) alive until the OS returns. Cap
+	// in-flight probes at one per mountpoint and serve the last good value while
+	// one is outstanding, so a dead drive can't accumulate goroutines.
+	diskMu       sync.Mutex
+	diskInflight map[string]bool
+	lastDisk     map[string]client.DiskReport
 }
 
 // New creates a new Collector, detects public IPs and takes initial network baseline.
@@ -71,6 +80,8 @@ func New() *Collector {
 			},
 			Timeout: 10 * time.Second,
 		},
+		diskInflight: make(map[string]bool),
+		lastDisk:     make(map[string]client.DiskReport),
 	}
 	c.detectPublicIPs()
 	c.cacheStaticInfo()
@@ -400,26 +411,97 @@ func (c *Collector) collectDisks(ctx context.Context) ([]client.DiskReport, erro
 
 	disks := make([]client.DiskReport, 0, len(partitions))
 	for _, p := range partitions {
-		// Per-disk timeout to avoid hanging on stale NFS mounts
-		diskCtx, cancel := context.WithTimeout(ctx, diskTimeout)
-		usage, err := disk.UsageWithContext(diskCtx, p.Mountpoint)
-		cancel()
+		mp := p.Mountpoint
+
+		// A prior probe for this mount is still blocked in the OS (wedged drive).
+		// Don't spawn another; serve the last good value so the disk doesn't
+		// vanish from the report, and move on.
+		if c.diskProbePending(mp) {
+			if last, ok := c.lastDiskReport(mp); ok {
+				disks = append(disks, last)
+			}
+			continue
+		}
+
+		usage, err := c.usageWithHardTimeout(ctx, mp)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"mount": p.Mountpoint,
-			}).WithError(err).Debug("skipping disk (timeout or error)")
+				"mount": mp,
+			}).WithError(err).Debug("disk probe timed out or errored; serving last known value")
+			// A transient timeout shouldn't drop the disk entirely.
+			if last, ok := c.lastDiskReport(mp); ok {
+				disks = append(disks, last)
+			}
 			continue
 		}
 		if usage.Total == 0 {
 			continue
 		}
-		disks = append(disks, client.DiskReport{
-			MountPoint: p.Mountpoint,
+		rep := client.DiskReport{
+			MountPoint: mp,
 			UsedBytes:  usage.Used,
 			TotalBytes: usage.Total,
-		})
+		}
+		c.storeDiskReport(mp, rep)
+		disks = append(disks, rep)
 	}
 	return disks, nil
+}
+
+func (c *Collector) diskProbePending(mp string) bool {
+	c.diskMu.Lock()
+	defer c.diskMu.Unlock()
+	return c.diskInflight[mp]
+}
+
+func (c *Collector) lastDiskReport(mp string) (client.DiskReport, bool) {
+	c.diskMu.Lock()
+	defer c.diskMu.Unlock()
+	rep, ok := c.lastDisk[mp]
+	return rep, ok
+}
+
+func (c *Collector) storeDiskReport(mp string, rep client.DiskReport) {
+	c.diskMu.Lock()
+	defer c.diskMu.Unlock()
+	c.lastDisk[mp] = rep
+}
+
+// usageWithHardTimeout runs disk.Usage in a goroutine and stops waiting after
+// diskTimeout even if the call itself hasn't returned. On Windows disk.Usage
+// ends in the blocking GetDiskFreeSpaceExW syscall, which ignores ctx — a
+// disconnected mapped network drive (Z:\ ...) can wedge it for tens of seconds
+// and stall the whole collection cycle. A context timeout alone can't interrupt
+// that syscall, so we abandon the goroutine (it exits when the OS finally
+// returns) and move on. The per-mount in-flight flag (set here, cleared when the
+// goroutine finally returns) caps a wedged drive at exactly one live goroutine.
+// Also honors outer ctx cancellation for a fast shutdown.
+func (c *Collector) usageWithHardTimeout(ctx context.Context, mountpoint string) (*disk.UsageStat, error) {
+	c.diskMu.Lock()
+	c.diskInflight[mountpoint] = true
+	c.diskMu.Unlock()
+
+	type result struct {
+		usage *disk.UsageStat
+		err   error
+	}
+	ch := make(chan result, 1) // buffered so an abandoned goroutine never blocks on send
+	go func() {
+		u, err := disk.UsageWithContext(ctx, mountpoint)
+		c.diskMu.Lock()
+		delete(c.diskInflight, mountpoint)
+		c.diskMu.Unlock()
+		ch <- result{u, err}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.usage, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(diskTimeout):
+		return nil, fmt.Errorf("disk usage for %s timed out after %s", mountpoint, diskTimeout)
+	}
 }
 
 func (c *Collector) collectProcesses(ctx context.Context) []client.Process {

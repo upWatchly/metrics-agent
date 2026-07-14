@@ -31,6 +31,12 @@ func main() {
 		log.WithError(err).Fatal("failed to determine windows service mode")
 	}
 
+	// Redirect logging to the service log file before the first log line, so a
+	// service (which has no console) captures startup output too.
+	if isService {
+		configureServiceLogging()
+	}
+
 	log.WithFields(log.Fields{
 		"version": version,
 		"commit":  commit,
@@ -42,7 +48,6 @@ func main() {
 	// itself. On every other platform (and the .exe run from a console) we fall
 	// through to the foreground path below.
 	if isService {
-		configureServiceLogging()
 		if err := runWindowsService(); err != nil {
 			log.WithError(err).Fatal("windows service failed")
 		}
@@ -71,13 +76,15 @@ func runAgent(ctx context.Context) error {
 
 	if os.Getenv("UW_PPROF") == "true" {
 		go func() {
-			log.Info("pprof listening on :6060")
-			if err := http.ListenAndServe(":6060", nil); err != nil {
+			// Bind loopback only — the pprof handlers expose heap/goroutine
+			// dumps and a CPU-profile DoS vector; they must not be reachable
+			// off-host.
+			log.Info("pprof listening on 127.0.0.1:6060")
+			if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
 				log.WithError(err).Warn("pprof server failed")
 			}
 		}()
 	}
 
-	agent.New(cfg, version).Run(ctx)
-	return nil
+	return agent.New(cfg, version).Run(ctx)
 }

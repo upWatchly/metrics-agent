@@ -1,7 +1,7 @@
 # upWatchly metrics-agent installer for Windows.
 #
 # Run from elevated PowerShell:
-#   irm https://github.com/upWatchly/metrics-agent/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/upwatchly/metrics-agent/releases/latest/download/install.ps1 | iex
 # or locally:
 #   powershell -ExecutionPolicy Bypass -File install.ps1
 #
@@ -20,7 +20,7 @@ $ApiEndpoint = 'https://api.upwatchly.com'
 $InstallDir  = 'C:\Program Files\upwatchly-agent'
 $LogDir      = 'C:\ProgramData\upwatchly-agent\logs'
 $AgentPath   = Join-Path $InstallDir 'upwatchly-agent.exe'
-$ReleaseUrl  = 'https://github.com/upWatchly/metrics-agent/releases/latest/download/upwatchly-agent-windows-amd64.exe'
+$ReleaseUrl  = 'https://github.com/upwatchly/metrics-agent/releases/latest/download/upwatchly-agent-windows-amd64.exe'
 $SvcRegKey   = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
 
 function Write-Step($msg) { Write-Host ">> $msg" -ForegroundColor Cyan }

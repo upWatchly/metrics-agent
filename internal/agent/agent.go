@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -69,8 +70,12 @@ func (a *Agent) getReportInterval() time.Duration {
 	return a.reportInterval
 }
 
-// Run starts the main reporting loop. Blocks until ctx is cancelled.
-func (a *Agent) Run(ctx context.Context) {
+// Run starts the main reporting loop. Blocks until ctx is cancelled, then
+// returns nil; returns a non-nil error only for a startup failure. Callers
+// (the console path and the Windows service handler) propagate that error so a
+// bad start is reported through the normal exit path — never via os.Exit, which
+// would bypass the service control manager's clean-stop protocol.
+func (a *Agent) Run(ctx context.Context) error {
 	log.Info("agent started")
 
 	// Start background metrics collection
@@ -79,10 +84,10 @@ func (a *Agent) Run(ctx context.Context) {
 	// Wait for first metrics to be collected (with timeout)
 	select {
 	case <-ctx.Done():
-		return
+		return nil
 	case <-a.firstReady:
 	case <-time.After(2 * time.Minute):
-		log.Fatal("failed to collect initial metrics within 2 minutes — check system permissions")
+		return fmt.Errorf("failed to collect initial metrics within 2 minutes — check system permissions")
 	}
 
 	// First send immediately
@@ -95,7 +100,7 @@ func (a *Agent) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			log.Info("agent stopping")
-			return
+			return nil
 		case <-ticker.C:
 			prevInterval := a.getReportInterval()
 			a.send(ctx)
