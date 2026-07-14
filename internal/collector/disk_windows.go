@@ -5,6 +5,7 @@ package collector
 import (
 	"strings"
 
+	"github.com/shirou/gopsutil/v4/disk"
 	"golang.org/x/sys/windows"
 )
 
@@ -14,14 +15,14 @@ import (
 // those reports the wrong capacity (e.g. a DVD's size instead of the system
 // disk) or blocks on a disconnected share. We keep only DRIVE_FIXED: local hard
 // disks and SSDs.
-func keepPartition(mountpoint string) bool {
-	root := mountpoint
+func keepPartition(p disk.PartitionStat) bool {
+	root := p.Mountpoint
 	if !strings.HasSuffix(root, `\`) {
 		root += `\` // GetDriveType wants a root path like "C:\"
 	}
-	p, err := windows.UTF16PtrFromString(root)
+	ptr, err := windows.UTF16PtrFromString(root)
 	if err != nil {
 		return false
 	}
-	return windows.GetDriveType(p) == windows.DRIVE_FIXED
+	return windows.GetDriveType(ptr) == windows.DRIVE_FIXED
 }

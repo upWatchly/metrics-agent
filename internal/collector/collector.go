@@ -420,9 +420,10 @@ func (c *Collector) collectDisks(ctx context.Context) ([]client.DiskReport, erro
 	for _, p := range partitions {
 		mp := p.Mountpoint
 
-		// Keep only real local disks. On Windows this drops the CD/DVD drive,
-		// removable media, and network drives that disk.Partitions returns.
-		if !keepPartition(mp) {
+		// Keep only real, fillable local disks. Platform-specific: Windows keeps
+		// DRIVE_FIXED only; Linux drops virtual/pseudo fstypes, container/OS mount
+		// trees, and read-only mounts.
+		if !keepPartition(p) {
 			continue
 		}
 
