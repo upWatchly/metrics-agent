@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/upwatchly/metrics-agent
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet (host + windows)
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./cmd/agent
+
+      - name: Test
+        run: go test ./...
+
+  # semantic-release reads conventional commits (feat→minor, fix→patch,
+  # BREAKING CHANGE→major), computes the next version, and creates the git tag +
+  # GitHub Release + CHANGELOG. Runs only on main pushes. The build job below
+  # consumes its version and attaches binaries to the release it created.
+  release:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      published: ${{ steps.semantic.outputs.new_release_published }}
+      version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Semantic Release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+          # changelog + git are not bundled in semantic-release core, so the
+          # action must install them explicitly.
+          extra_plugins: |
+            @semantic-release/changelog@6
+            @semantic-release/git@10
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # upload binaries to the release
+      packages: write   # push the docker image
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # The release job just created tag v${VERSION}; fetch it so gh can
+          # target that release.
+          fetch-depth: 0
+          ref: v${{ needs.release.outputs.version }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build metadata
+        id: meta
+        run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile binaries
+        run: |
+          mkdir -p dist
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${{ steps.meta.outputs.commit }}"
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/upwatchly-agent-linux-amd64       ./cmd/agent
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/upwatchly-agent-linux-arm64       ./cmd/agent
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/upwatchly-agent-windows-amd64.exe ./cmd/agent
+          cp install.sh scripts/install.ps1 scripts/uninstall.ps1 dist/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+
+      - name: Attach binaries to the release
+        run: gh release upload "v${VERSION}" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
