@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/upWatchly/metrics-agent/compare/v1.2.0...v1.3.0) (2026-07-14)
+
+
+### Features
+
+* implement hard timeout for disk partition enumeration and improve error handling ([15bb242](https://github.com/upWatchly/metrics-agent/commit/15bb24233bca30a20066411250d9cac72c4a4c8d))
+
 # [1.2.0](https://github.com/upWatchly/metrics-agent/compare/v1.1.0...v1.2.0) (2026-07-14)
 
 
